@@ -1,0 +1,21 @@
+[package]
+name = "urdf2usd-cli"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "Command-line front-end for the `urdf2usd` library: convert between URDF and OpenUSD in either direction."
+repository = "https://github.com/bresilla/urdf2usd"
+keywords = ["urdf", "usd", "openusd", "robotics", "converter"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "u2u"
+path = "src/main.rs"
+
+[dependencies]
+# Library this CLI wraps. Path dep so the workspace rebuilds together.
+urdf2usd = { path = "../.." }
+
+# Argument parsing. Library-side code has no clap dependency — this is
+# entirely a binary-only concern.
+clap = { version = "4", features = ["derive"] }

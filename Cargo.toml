@@ -1,0 +1,85 @@
+[workspace]
+members = ["crates/usd_schemas", "crates/urdf2usd-cli"]
+
+[package]
+name = "urdf2usd"
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+description = "Library for converting URDF robot descriptions into OpenUSD assets (and back)."
+
+[dependencies]
+# URDF parser: full serde-derived model of the URDF XML schema.
+urdf-rs = "0.9"
+
+# Pure-Rust USD writer (.usda / .usdc / .usdz). No crate on crates.io yet,
+# writers landed on main recently.
+openusd = { git = "https://github.com/mxpv/openusd", branch = "main" }
+
+# Schema-authoring helpers that sit between `openusd` and us. Could be
+# upstreamed to mxpv/openusd or published separately; lives here as a
+# workspace sibling for now.
+usd_schemas = { path = "crates/usd_schemas" }
+
+# STL / OBJ / DAE parser used by urdf-viz. Handles all three formats that
+# URDF `<mesh filename="...">` can reference. mesh-loader hides per-face
+# material ids (material_index is pub(crate)), so we use it for STL/DAE and
+# fall back to `tobj` for OBJ when we want per-material GeomSubsets.
+mesh-loader = "0.1.6"
+tobj = "4"
+
+# Symmetric eigendecomposition for the 3x3 inertia tensor -> diagonalInertia
+# + principalAxes (UsdPhysics.MassAPI).
+nalgebra = "0.33"
+
+# Streaming XML rewriter. We preprocess URDF text to inject missing-but-required
+# attributes (material names, limit velocities) that urdf-rs rejects but real-
+# world URDFs commonly omit. Same version urdf-rs itself pulls in transitively.
+quick-xml = "0.36"
+
+# Error plumbing. `anyhow` matches openusd's own error style at the boundary;
+# `thiserror` is used for our typed library errors.
+anyhow = "1"
+thiserror = "2"
+
+# Used by integration tests + the `examples/view_roundtrip.rs` binary.
+# Pulls in Bevy + rapier — heavy, kept out of normal builds.
+[dev-dependencies]
+bevy_urdf = { git = "https://github.com/bresilla/bevy_urdf" }
+# Same Bevy version + feature set as bevy_urdf so feature unification
+# resolves to a single build (otherwise cargo sees disjoint feature
+# unions and recompiles Bevy twice).
+bevy_egui = { version = "0.39", default-features = false, features = [
+    "default_fonts",
+    "render",
+] }
+bevy = { version = "0.18", default-features = false, features = [
+    "std",
+    "async_executor",
+    "multi_threaded",
+    "bevy_asset",
+    "bevy_state",
+    "bevy_log",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_render",
+    "bevy_core_pipeline",
+    "bevy_pbr",
+    "bevy_light",
+    "bevy_mesh",
+    "bevy_camera",
+    "bevy_image",
+    "bevy_scene",
+    "default_font",
+    "tonemapping_luts",
+    "smaa_luts",
+    "ktx2",
+    "zstd_rust",
+    "png",
+    "x11",
+    "reflect_auto_register",
+] }
+
+[[example]]
+name = "view_roundtrip"
+path = "examples/view_roundtrip.rs"
