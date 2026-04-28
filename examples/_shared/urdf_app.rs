@@ -27,6 +27,13 @@ use bevy_urdf::{
     JointKind, LoadRobot, PackageMap, Robot, RobotJoint, RobotLink, RobotRoot, UrdfPlugin,
 };
 
+#[allow(dead_code)]
+const _: fn() = || {
+    // Compile-time touch so JointKind import isn't pruned by an
+    // overzealous IDE — used in the slider type-match below.
+    let _: Option<JointKind> = None;
+};
+
 const APP_NAME: &str = "u2u_urdf_viewer";
 
 // ── Ribbon layout ─────────────────────────────────────────────────────
@@ -40,6 +47,7 @@ const RIBBON_RIGHT: &str = "u2urdf_ribbon_right";
 const MENU_JOINTS: &str = "u2urdf_menu_joints";
 const MENU_OVERLAYS: &str = "u2urdf_menu_overlays";
 const MENU_TREE: &str = "u2urdf_menu_tree";
+const MENU_INFO: &str = "u2urdf_menu_info";
 
 const RIBBONS: &[RibbonDef] = &[
     RibbonDef {
@@ -88,6 +96,15 @@ const RIBBON_ITEMS: &[RibbonItem] = &[
         tooltip: "Tree — links + joints from the loaded URDF",
         child_ribbon: None,
     },
+    RibbonItem {
+        id: MENU_INFO,
+        ribbon: RIBBON_RIGHT,
+        cluster: RibbonCluster::Start,
+        slot: 0,
+        glyph: RibbonGlyph::Icon("info"),
+        tooltip: "Info — file format, path, and asset stats",
+        child_ribbon: None,
+    },
 ];
 
 /// Build and run the native-URDF App against `urdf_path`. Caller is
@@ -116,6 +133,10 @@ pub fn run(urdf_path: PathBuf) {
 
     println!("→ launching native URDF viewer (bevy_urdf + bevy_glacial + bevy_frost) …");
     App::new()
+        .insert_resource(InputInfo {
+            path: urdf_path.clone(),
+            format: "URDF",
+        })
         .insert_resource(InitialUrdf(urdf_path))
         .insert_resource(InitialPackages(package_map))
         .insert_resource(JointAngles::default())
@@ -159,7 +180,7 @@ pub fn run(urdf_path: PathBuf) {
             Update,
             (
                 track_selection,
-                patch_selection_ring_alpha,
+                log_load_counts,
                 apply_joint_angles,
                 apply_frame_overlays,
                 apply_main_gizmo_toggle,
@@ -180,11 +201,26 @@ pub fn run(urdf_path: PathBuf) {
                 .after(EguiPostUpdateSet::EndPass)
                 .before(EguiPostUpdateSet::ProcessOutput),
         )
+        // Run the alpha patch in `Last` (post-`PostUpdate`) so it
+        // wins against bevy_glacial's `update_selection_ring`, which
+        // runs in `Update` and hardcodes `extension.alpha = 0.9`. If
+        // we left this in `Update`, the parallel scheduler could
+        // interleave them and our 0.1 sometimes lost.
+        .add_systems(bevy::app::Last, patch_selection_ring_alpha)
         .run();
 }
 
 #[derive(Resource)]
 struct InitialUrdf(PathBuf);
+
+/// Captured at startup so the Info panel can show the user the
+/// resolved file path + format label this app instance was built
+/// for. `format` is a static label ("URDF" here).
+#[derive(Resource, Clone)]
+struct InputInfo {
+    path: PathBuf,
+    format: &'static str,
+}
 
 #[derive(Resource)]
 struct InitialPackages(HashMap<String, PathBuf>);
@@ -305,6 +341,37 @@ fn send_load_robot(
 /// ring tracker + main-gizmo toggle find the spawn point.
 #[derive(Component)]
 struct UrdfRoot;
+
+/// Print the link/joint counts the first time bevy_urdf has finished
+/// spawning. Lets the user confirm at a glance how many movable vs.
+/// fixed joints the URDF carries — useful for files like the Webots-
+/// converted Robotti where every joint is `<fixed>` (so the slider
+/// pane is empty by design, not by bug).
+fn log_load_counts(
+    links: Query<&RobotLink>,
+    joints: Query<&RobotJoint>,
+    mut done: Local<bool>,
+) {
+    if *done {
+        return;
+    }
+    let n_links = links.iter().count();
+    let n_joints = joints.iter().count();
+    if n_links == 0 || n_joints == 0 {
+        return;
+    }
+    // `JointKind` doesn't implement `Hash`, so bucket by Debug
+    // repr — purely for the log line.
+    let mut by_kind: HashMap<String, usize> = HashMap::new();
+    for j in joints.iter() {
+        *by_kind.entry(format!("{:?}", j.kind)).or_insert(0) += 1;
+    }
+    info!(
+        "URDF spawned: {n_links} links, {n_joints} joints ({:?})",
+        by_kind
+    );
+    *done = true;
+}
 
 fn open_default_panel(mut open: ResMut<RibbonOpen>) {
     open.toggle(RIBBON_LEFT, MENU_JOINTS);
@@ -598,6 +665,8 @@ fn draw_panels(
     placement: Res<RibbonPlacement>,
     joints_q: Query<&RobotJoint>,
     links_q: Query<&RobotLink>,
+    info: Res<InputInfo>,
+    pkgs: Res<InitialPackages>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -815,6 +884,52 @@ fn draw_panels(
                         ui.push_id(("jt", i), |ui| {
                             ui.label(format!("{}  ({:?})", j.name, j.kind));
                         });
+                    }
+                });
+            },
+        );
+    }
+
+    // ── Info ─────── anchored top-right via the right-side ribbon
+    // button. URDF-specific stats: link count, joint count, package
+    // map entries (so the user can confirm `package://` URIs are
+    // resolving to the right disk locations).
+    if is_open(MENU_INFO) {
+        floating_window_for_item(
+            ctx,
+            RIBBONS,
+            RIBBON_ITEMS,
+            &placement,
+            MENU_INFO,
+            "Info",
+            egui::vec2(360.0, 260.0),
+            &mut keep_open,
+            accent_color,
+            |pane| {
+                pane.section("file", "File", true, |ui| {
+                    ui.label(format!("Format: {}", info.format));
+                    if let Some(name) =
+                        info.path.file_name().and_then(|s| s.to_str())
+                    {
+                        ui.label(format!("Name: {name}"));
+                    }
+                    ui.label(format!("Path: {}", info.path.display()));
+                });
+                pane.section("stats", "Stats", true, |ui| {
+                    ui.label(format!("Links: {}", links_q.iter().count()));
+                    ui.label(format!("Joints: {}", joints.len()));
+                });
+                pane.section("packages", "Packages", true, |ui| {
+                    if pkgs.0.is_empty() {
+                        ui.label("(no package:// URIs resolved)");
+                    } else {
+                        let mut entries: Vec<(&String, &PathBuf)> = pkgs.0.iter().collect();
+                        entries.sort_by_key(|(n, _)| n.as_str());
+                        for (i, (name, root)) in entries.iter().enumerate() {
+                            ui.push_id(("pkg", i), |ui| {
+                                ui.label(format!("{name} → {}", root.display()));
+                            });
+                        }
                     }
                 });
             },

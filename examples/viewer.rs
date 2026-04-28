@@ -35,10 +35,10 @@ fn main() {
         .unwrap_or_default();
     match ext.as_str() {
         "urdf" | "xml" => urdf_app::run(path),
-        "usda" | "usdc" | "usd" => usd_app::run(path),
+        "usda" | "usdc" | "usd" | "usdz" => usd_app::run(path),
         other => {
             eprintln!(
-                "error: unsupported extension `.{other}` — use .urdf / .xml or .usda / .usdc / .usd"
+                "error: unsupported extension `.{other}` — use .urdf / .xml or .usda / .usdc / .usd / .usdz"
             );
             std::process::exit(1);
         }

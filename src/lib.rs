@@ -16,10 +16,14 @@ pub mod opts;
 pub mod resolve;
 pub mod to_urdf;
 pub mod to_usd;
+pub mod to_usdc;
 pub mod tolerate;
 pub mod undefined;
+pub mod usdz;
 
 pub use opts::Options;
+pub use to_usdc::convert_layered_dir_to_usdc;
+pub use usdz::pack_dir_to_usdz;
 
 use std::path::{Path, PathBuf};
 

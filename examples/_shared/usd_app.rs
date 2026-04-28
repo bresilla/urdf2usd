@@ -65,6 +65,7 @@ const RIBBON_RIGHT: &str = "u2u_ribbon_right";
 const MENU_JOINTS: &str = "u2u_menu_joints";
 const MENU_OVERLAYS: &str = "u2u_menu_overlays";
 const MENU_TREE: &str = "u2u_menu_tree";
+const MENU_INFO: &str = "u2u_menu_info";
 
 const RIBBONS: &[RibbonDef] = &[
     RibbonDef {
@@ -113,6 +114,15 @@ const RIBBON_ITEMS: &[RibbonItem] = &[
         tooltip: "Tree — rigid bodies + joints from the loaded asset",
         child_ribbon: None,
     },
+    RibbonItem {
+        id: MENU_INFO,
+        ribbon: RIBBON_RIGHT,
+        cluster: RibbonCluster::Start,
+        slot: 0,
+        glyph: RibbonGlyph::Icon("info"),
+        tooltip: "Info — file format, path, and asset stats",
+        child_ribbon: None,
+    },
 ];
 
 /// Build and run the USD-loading App against `input_path`. Caller is
@@ -125,9 +135,9 @@ pub fn run(input_path: PathBuf) {
         .and_then(|s| s.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
-    if !matches!(ext.as_str(), "usda" | "usdc" | "usd") {
+    if !matches!(ext.as_str(), "usda" | "usdc" | "usd" | "usdz") {
         eprintln!(
-            "error: input must be a USD file (.usda / .usdc / .usd) — got `.{ext}`."
+            "error: input must be a USD file (.usda / .usdc / .usd / .usdz) — got `.{ext}`."
         );
         std::process::exit(1);
     }
@@ -161,6 +171,10 @@ pub fn run(input_path: PathBuf) {
     println!("input  : {}", input_path.display());
     println!("→ launching viewer (bevy_openusd + bevy_glacial + bevy_frost) …");
     App::new()
+        .insert_resource(InputInfo {
+            path: input_path.clone(),
+            format: "USD",
+        })
         .insert_resource(LoadedUsd(usd_rel))
         .insert_resource(LoaderSearchPaths(search_paths))
         .insert_resource(SpawnedScene::default())
@@ -221,7 +235,6 @@ pub fn run(input_path: PathBuf) {
                 spawn_when_ready,
                 snapshot_link_rest,
                 track_selection,
-                patch_selection_ring_alpha,
                 apply_joint_angles,
                 apply_frame_overlays,
                 apply_main_gizmo_toggle,
@@ -247,11 +260,27 @@ pub fn run(input_path: PathBuf) {
                 .after(EguiPostUpdateSet::EndPass)
                 .before(EguiPostUpdateSet::ProcessOutput),
         )
+        // Run the alpha patch in `Last` (post-`PostUpdate`) so it
+        // wins against bevy_glacial's `update_selection_ring`, which
+        // runs in `Update` and hardcodes `extension.alpha = 0.9`. If
+        // we left this in `Update`, the parallel scheduler could
+        // interleave them and our 0.1 sometimes lost.
+        .add_systems(bevy::app::Last, patch_selection_ring_alpha)
         .run();
 }
 
 #[derive(Resource)]
 struct LoadedUsd(PathBuf);
+
+/// Captured at startup so the Info panel can show the user the
+/// resolved file path + the format label this app was instantiated
+/// for. `format` is a static label ("USD" or "URDF") set by whichever
+/// pipeline built the App.
+#[derive(Resource, Clone)]
+struct InputInfo {
+    path: PathBuf,
+    format: &'static str,
+}
 
 #[derive(Resource)]
 struct LoaderSearchPaths(Vec<PathBuf>);
@@ -1018,6 +1047,7 @@ fn draw_panels(
     accent: Res<AccentColor>,
     open: Res<RibbonOpen>,
     placement: Res<RibbonPlacement>,
+    info: Res<InputInfo>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -1245,6 +1275,42 @@ fn draw_panels(
                             ui.label(format!("{leaf}  ({:?})", j.kind));
                         });
                     }
+                });
+            },
+        );
+    }
+
+    // ── Info ─────── anchored top-right via the right-side ribbon
+    // button. Shows file format + path + asset stats so the user can
+    // tell at a glance which pipeline (USD or URDF) is currently
+    // driving the scene.
+    if is_open(MENU_INFO) {
+        floating_window_for_item(
+            ctx,
+            RIBBONS,
+            RIBBON_ITEMS,
+            &placement,
+            MENU_INFO,
+            "Info",
+            egui::vec2(360.0, 220.0),
+            &mut keep_open,
+            accent_color,
+            |pane| {
+                pane.section("file", "File", true, |ui| {
+                    ui.label(format!("Format: {}", info.format));
+                    if let Some(name) =
+                        info.path.file_name().and_then(|s| s.to_str())
+                    {
+                        ui.label(format!("Name: {name}"));
+                    }
+                    ui.label(format!("Path: {}", info.path.display()));
+                });
+                pane.section("stats", "Stats", true, |ui| {
+                    ui.label(format!("Joints: {}", robot.joints.len()));
+                    ui.label(format!(
+                        "Rigid bodies: {}",
+                        robot.rigid_body_paths.len()
+                    ));
                 });
             },
         );

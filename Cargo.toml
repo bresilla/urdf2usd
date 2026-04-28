@@ -109,11 +109,3 @@ bevy = { version = "0.18", default-features = false, features = [
 [[example]]
 name = "viewer"
 path = "examples/viewer.rs"
-
-[[example]]
-name = "usd_viewer"
-path = "examples/usd_viewer.rs"
-
-[[example]]
-name = "urdf_viewer"
-path = "examples/urdf_viewer.rs"

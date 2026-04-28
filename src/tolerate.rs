@@ -207,6 +207,15 @@ fn patch_start<'a>(e: BytesStart<'a>, anon_mat: &mut u32) -> BytesStart<'a> {
         b"inertia" => ensure_inertia_attrs(e),
         b"color" if !has_attr(&e, b"rgba") => clone_with_attr(&e, "rgba", "1 1 1 1"),
         b"mesh" if !has_attr(&e, b"filename") => clone_with_attr(&e, "filename", ""),
+        // URDF defaults for `<axis>` and `<origin>` are `1 0 0` and
+        // `0 0 0` respectively. urdf-rs is strict and rejects the
+        // tag when the attribute is absent (which happens in the
+        // wild — typos like `xzy="0 0 1"` on `<axis>` exist in
+        // public URDFs). Inject the spec default so the parse
+        // succeeds; the original (typo'd) attribute is left in
+        // place but ignored, matching urdf-rs's deserialiser.
+        b"axis" if !has_attr(&e, b"xyz") => clone_with_attr(&e, "xyz", "1 0 0"),
+        b"origin" if !has_attr(&e, b"xyz") => clone_with_attr(&e, "xyz", "0 0 0"),
         _ => e,
     }
 }

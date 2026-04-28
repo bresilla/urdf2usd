@@ -23,7 +23,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use urdf2usd::opts::PackageOverride;
-use urdf2usd::{Options, urdf_to_usd, usd_to_urdf};
+use urdf2usd::{
+    Options, convert_layered_dir_to_usdc, pack_dir_to_usdz, urdf_to_usd, usd_to_urdf,
+};
 
 /// Convert between URDF and OpenUSD assets in either direction.
 #[derive(Debug, Parser)]
@@ -72,6 +74,21 @@ struct ToUsdArgs {
     /// Emit a single flattened `.usda` instead of an Atomic Component.
     #[arg(long, alias = "no-layer-structure")]
     flat: bool,
+
+    /// Pack the layered output into a single `.usdz` archive
+    /// (`<output_dir>/<robot>.usdz`) and remove the loose layered
+    /// files. The robot stays addressable as one self-contained
+    /// asset — sublayers and textures live inside the zip.
+    #[arg(long)]
+    usdz: bool,
+
+    /// After writing the layered `.usda`, post-process every layer
+    /// to binary `.usdc` and rewrite the top file's `subLayers`
+    /// references accordingly. Combine with `--usdz` to ship a USDZ
+    /// archive whose internal layers are USDC (the standard
+    /// production layout — smaller and faster to parse than text).
+    #[arg(long)]
+    usdc: bool,
 
     /// Skip authoring the `UsdPhysics.Scene` prim.
     #[arg(long, alias = "no-physics-scene")]
@@ -165,6 +182,8 @@ fn auto_dispatch(input: &Path, output: &Path, verbose: bool) -> urdf2usd::Result
                 no_physics: false,
                 comment: String::new(),
                 package: Vec::new(),
+                usdz: false,
+                usdc: false,
             },
             verbose,
         ),
@@ -188,6 +207,7 @@ fn run_to_usd(args: ToUsdArgs, verbose: bool) -> urdf2usd::Result<PathBuf> {
         eprintln!("  output dir = {}", args.output_dir.display());
         eprintln!("  layered    = {}", !args.flat);
         eprintln!("  scene      = {}", !args.no_physics);
+        eprintln!("  usdz       = {}", args.usdz);
         if !args.comment.is_empty() {
             eprintln!("  comment    = {:?}", args.comment);
         }
@@ -195,13 +215,60 @@ fn run_to_usd(args: ToUsdArgs, verbose: bool) -> urdf2usd::Result<PathBuf> {
             eprintln!("  package    = {} -> {}", p.name, p.path.display());
         }
     }
+    // `--usdz` always emits a single flattened layer inside the
+    // archive — that's the whole point of USDZ ("one self-contained
+    // file"). Forcing `flat = true` here means the archive holds one
+    // `.usd*` + textures instead of a 4-layer atomic component the
+    // consumer would have to recompose.
+    let flat = args.flat || args.usdz;
     let opts = Options {
-        layer_structure: !args.flat,
+        layer_structure: !flat,
         scene: !args.no_physics,
         comment: args.comment,
         packages: args.package,
     };
-    urdf_to_usd(&args.input_file, &args.output_dir, &opts)
+
+    if !args.usdz {
+        // Loose-layered output. If `--usdc` is set, convert the
+        // freshly-written `.usda` files in place to `.usdc` so the
+        // user's directory ends up with binary layers.
+        let top = urdf_to_usd(&args.input_file, &args.output_dir, &opts)?;
+        if args.usdc {
+            convert_layered_dir_to_usdc(&args.output_dir)?;
+            return Ok(top.with_extension("usdc"));
+        }
+        return Ok(top);
+    }
+
+    // USDZ path: write the layered asset into a per-robot subdir
+    // under output_dir, optionally rewrite text→binary, pack to
+    // `<output_dir>/<robot>.usdz`, then remove the loose subdir so
+    // the caller is left with one file.
+    let stem = args
+        .input_file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("robot")
+        .to_string();
+    let stage_dir = args.output_dir.join(format!("{stem}.usdz_staging"));
+    if stage_dir.exists() {
+        std::fs::remove_dir_all(&stage_dir)
+            .map_err(urdf2usd::Error::Io)?;
+    }
+    let _ = urdf_to_usd(&args.input_file, &stage_dir, &opts)?;
+    if args.usdc {
+        convert_layered_dir_to_usdc(&stage_dir)?;
+    }
+    let usdz_path = args.output_dir.join(format!("{stem}.usdz"));
+    let written = pack_dir_to_usdz(&stage_dir, &usdz_path)?;
+    // Best-effort cleanup; if it fails we still keep the .usdz.
+    if let Err(e) = std::fs::remove_dir_all(&stage_dir) {
+        eprintln!(
+            "warning: failed to remove staging dir {}: {e}",
+            stage_dir.display()
+        );
+    }
+    Ok(written)
 }
 
 fn run_to_urdf(args: ToUrdfArgs, verbose: bool) -> urdf2usd::Result<PathBuf> {
