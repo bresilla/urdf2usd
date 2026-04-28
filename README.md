@@ -17,33 +17,36 @@ for URDF parsing.
 
 ```
 urdf2usd/
-├── Cargo.toml                  workspace + library crate
-├── src/                        urdf2usd library
-│   ├── to_usd/                 URDF → USD pipeline
-│   ├── to_urdf/                USD → URDF back-converter
-│   ├── tolerate.rs             URDF tolerance (injects missing required attrs)
-│   ├── undefined.rs            Passthrough for unknown URDF extensions
-│   ├── hierarchy.rs            Link/joint graph + ghost-link chain
-│   ├── resolve.rs              package:// and file:// URI resolver
-│   ├── math/                   RPY ↔ quat, inertia eigendecomposition
-│   └── opts.rs                 Conversion options
-├── tests/roundtrip.rs          URDF → USD → URDF structural round-trip tests
-├── examples/view_roundtrip.rs  bevy_urdf viewer with joints + overlays
+├── Cargo.toml                workspace + library crate
+├── src/                      urdf2usd library
+│   ├── to_usd/               URDF → USD pipeline
+│   ├── to_urdf/              USD → URDF back-converter
+│   ├── tolerate.rs           URDF tolerance (injects missing required attrs)
+│   ├── undefined.rs          Passthrough for unknown URDF extensions
+│   ├── hierarchy.rs          Link/joint graph + ghost-link chain
+│   ├── resolve.rs            package:// and file:// URI resolver
+│   ├── math/                 RPY ↔ quat, inertia eigendecomposition
+│   └── opts.rs               Conversion options
+├── tests/roundtrip.rs        URDF → USD → URDF structural round-trip tests
+├── examples/view_in_bevy.rs  Convert + render in Bevy via bevy_openusd
 └── crates/
-    ├── usd_schemas/            UsdGeom / UsdPhysics / UsdShade authoring
-    │                            helpers on top of openusd — standalone,
-    │                            reusable, no URDF dependency.
-    └── urdf2usd-cli/           The `u2u` command-line binary
-                                 (clap lives here, not in the library).
+    └── urdf2usd-cli/         The `u2u` command-line binary
+                               (clap lives here, not in the library).
 ```
 
-Three crates, three concerns:
+Two crates, two concerns:
 
 | crate | scope |
 |---|---|
 | `urdf2usd` | The converter pipelines (both directions). No CLI, no clap. |
-| `usd_schemas` | Typed authoring helpers (`UsdGeom.Mesh`, `UsdPhysics.RevoluteJoint`, `UsdShade.Material`, etc.) layered on top of `openusd::sdf`. Portable — drop into any Rust project that needs to author USD. |
 | `urdf2usd-cli` | The `u2u` binary: clap wiring around the library. |
+
+Schema authoring + reading helpers (`UsdGeom.Mesh`, `UsdPhysics.RevoluteJoint`,
+`UsdShade.Material`, etc.) live in [`bevy_openusd`'s `usd_schemas`
+crate](https://github.com/bresilla/bevy_openusd) — what was originally
+extracted from this repo has grown into a much richer crate (added camera
+/ light / skel / anim / NURBS / curves / typed readers). We consume that
+canonical version via a path dependency.
 
 ## Install
 
@@ -200,27 +203,35 @@ cargo test                  # workspace: 26 unit + 7 round-trip
 cargo test -p usd_schemas   # just the schema crate's math tests
 ```
 
-## bevy_urdf viewer example
+## Bevy viewer example
 
-For visual round-trip verification, an example wraps everything into a
-Bevy window with bevy_urdf's viewer:
+For visual verification, an example converts the URDF to USD and renders
+it natively in Bevy through [`bevy_openusd`](https://github.com/bresilla/bevy_openusd)'s
+`UsdPlugin`:
 
 ```bash
-cargo run --example view_roundtrip -- path/to/robot.urdf
+cargo run --example view_in_bevy -- path/to/robot.urdf
 # default: uses xtra/urdf-usd-converter/tests/data/fixed_continuous_joints.urdf
 ```
 
-Does URDF → USD → URDF, then spawns a Bevy app loading the reconstructed
-URDF with a left sidebar:
+The example:
 
-- **Joints** — `draw_joint_controls` slider per DOF. Drag to verify
-  axes, limits, and parent/child survived.
-- **Overlays** — checkboxes for visual / collision / link frames / joint
-  frames / link name labels / world grid / world axes.
-- **Info** — artifact paths.
+1. Parses the URDF.
+2. Calls `urdf_to_usd` — writes layered `<robot>.usda` + sublayers under
+   `<input_dir>/.urdf2usd_rt/`.
+3. Spawns a Bevy app with `bevy_openusd::UsdPlugin` and
+   `SceneRoot(asset_server.load(usd_path))`. The same Stage projection
+   `bevy_openusd`'s viewer uses — one entity per composed prim, basis
+   fix at the root, mesh + material loading via the asset pipeline.
 
-Pulls in Bevy + rapier as dev-dependencies. Heavy — kept out of normal
-builds.
+For the fully-featured viewer (VS-Code chrome + variant switcher +
+overlays panel) point `bevy_openusd`'s own viewer at the converted USD:
+
+```bash
+cargo run -p bevy_openusd -- /path/to/converted.usda
+```
+
+Pulls in Bevy as a dev-dependency — heavy, kept out of normal builds.
 
 ## Architecture notes
 
@@ -238,10 +249,11 @@ and so on. It stamps the correct `TypeName` tokens, `apiSchemas` list
 ops, and attribute defaults that downstream tools (usdview, Omniverse,
 Newton, bevy_urdf, Unreal's USD importer) recognise.
 
-The crate is deliberately portable — depends only on `openusd` and
-`anyhow` — so anyone authoring USD from Rust can use it without pulling
-in the rest of the converter. See `crates/usd_schemas/src/lib.rs` for
-the API surface.
+The schema crate is deliberately portable — depends only on `openusd`
+and `anyhow` — so anyone authoring or reading USD from Rust can use it
+without pulling in either this converter or `bevy_openusd`. See
+[`bevy_openusd/crates/usd_schemas/src/lib.rs`](https://github.com/bresilla/bevy_openusd/blob/main/crates/usd_schemas/src/lib.rs)
+for the API surface.
 
 ### Forward-path axis correction
 
@@ -287,7 +299,7 @@ cargo build                                 # library + all workspace crates
 cargo build -p urdf2usd-cli                 # just the CLI (`u2u` binary)
 cargo test --workspace --lib                # unit tests
 cargo test -p urdf2usd --test roundtrip     # full-pipeline round-trip tests
-cargo run --example view_roundtrip -- <f>   # visual round-trip in bevy_urdf
+cargo run --example view_in_bevy -- <f>     # convert URDF and render in Bevy via bevy_openusd
 ```
 
 ## Dependencies
@@ -295,6 +307,7 @@ cargo run --example view_roundtrip -- <f>   # visual round-trip in bevy_urdf
 Runtime (library):
 
 - [`openusd`](https://github.com/mxpv/openusd) (git, `main`) — spec-level USD.
+- [`usd_schemas`](https://github.com/bresilla/bevy_openusd) (path dep into `../bevy_openusd`) — typed schema authoring + reading helpers.
 - [`urdf-rs`](https://crates.io/crates/urdf-rs) 0.9 — URDF parser.
 - [`mesh-loader`](https://crates.io/crates/mesh-loader) 0.1 — STL / DAE loading.
 - [`tobj`](https://crates.io/crates/tobj) 4 — OBJ loading with per-material face IDs.
@@ -308,8 +321,8 @@ Binary-only:
 
 Example-only (dev-dependency):
 
-- [`bevy_urdf`](https://github.com/bresilla/bevy_urdf) (git, `main`)
-- `bevy`, `bevy_egui` 0.18 / 0.39
+- [`bevy_openusd`](https://github.com/bresilla/bevy_openusd) (path dep) — `UsdPlugin` for the example viewer.
+- `bevy` 0.18.
 
 ## License
 

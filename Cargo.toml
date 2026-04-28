@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/usd_schemas", "crates/urdf2usd-cli"]
+members = ["crates/urdf2usd-cli"]
 
 [package]
 name = "urdf2usd"
@@ -16,10 +16,14 @@ urdf-rs = "0.9"
 # writers landed on main recently.
 openusd = { git = "https://github.com/mxpv/openusd", branch = "main" }
 
-# Schema-authoring helpers that sit between `openusd` and us. Could be
-# upstreamed to mxpv/openusd or published separately; lives here as a
-# workspace sibling for now.
-usd_schemas = { path = "crates/usd_schemas" }
+# Schema-authoring helpers that sit between `openusd` and us. Originally
+# extracted from this repo, now grown into a much richer crate inside
+# `bevy_openusd` (added camera / light / skel / anim / nurbs / curves /
+# typed readers). We consume that canonical version; the local
+# `crates/usd_schemas/` was deleted to avoid drift. When `bevy_openusd`
+# starts publishing to crates.io / mxpv accepts the upstream PR, swap
+# the path dep for the registry one.
+usd_schemas = { path = "../bevy_openusd/crates/usd_schemas" }
 
 # STL / OBJ / DAE parser used by urdf-viz. Handles all three formats that
 # URDF `<mesh filename="...">` can reference. mesh-loader hides per-face
@@ -42,13 +46,31 @@ quick-xml = "0.36"
 anyhow = "1"
 thiserror = "2"
 
-# Used by integration tests + the `examples/view_roundtrip.rs` binary.
-# Pulls in Bevy + rapier — heavy, kept out of normal builds.
+# Dev deps drive the example viewer that converts a URDF and renders the
+# resulting USD natively in Bevy.
+#
+# - `bevy_openusd` provides the `UsdPlugin` + `UsdAsset` asset pipeline.
+# - `bevy_glacial` provides the world chrome — chase camera with mouse
+#   pan / orbit / zoom, an LOD ground grid that follows the camera, and
+#   an axis-triad gizmo to show world orientation.
+#
+# Bevy feature union here = the union `bevy_openusd` and `bevy_glacial`
+# need, so cargo's feature unification builds Bevy once across all three.
 [dev-dependencies]
-bevy_urdf = { git = "https://github.com/bresilla/bevy_urdf" }
-# Same Bevy version + feature set as bevy_urdf so feature unification
-# resolves to a single build (otherwise cargo sees disjoint feature
-# unions and recompiles Bevy twice).
+bevy_openusd = { path = "../bevy_openusd" }
+bevy_glacial = { git = "https://github.com/bresilla/bevy_glacial" }
+# Pure URDF → Bevy library. The `urdf_viewer` example uses it to
+# render URDF directly (no conversion, no USD), so the same UI shell
+# as `viewer` (Joints / Overlays / Tree panes via Frost, Glacial
+# camera/gizmos/grid) can be pointed at native URDF for comparison.
+# Pinned by rev so a downstream consumer of the example doesn't move
+# under us when bevy_urdf's main branch advances.
+bevy_urdf = { git = "https://github.com/bresilla/bevy_urdf.git", rev = "3c9e0e8" }
+# UI for the viewer — glass-themed editor kit on top of egui. Provides
+# the floating panels, ribbons, and gallery widgets (`toggle`,
+# `pretty_slider`, `tree_row`) we use to build the joints / overlays /
+# selection panels.
+bevy_frost = { git = "https://github.com/bresilla/bevy_frost.git", package = "bevy_frost" }
 bevy_egui = { version = "0.39", default-features = false, features = [
     "default_fonts",
     "render",
@@ -62,6 +84,7 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_log",
     "bevy_window",
     "bevy_winit",
+    "bevy_input_focus",
     "bevy_render",
     "bevy_core_pipeline",
     "bevy_pbr",
@@ -69,6 +92,9 @@ bevy = { version = "0.18", default-features = false, features = [
     "bevy_mesh",
     "bevy_camera",
     "bevy_image",
+    "bevy_gizmos",
+    "bevy_gizmos_render",
+    "bevy_picking",
     "bevy_scene",
     "default_font",
     "tonemapping_luts",
@@ -81,5 +107,13 @@ bevy = { version = "0.18", default-features = false, features = [
 ] }
 
 [[example]]
-name = "view_roundtrip"
-path = "examples/view_roundtrip.rs"
+name = "viewer"
+path = "examples/viewer.rs"
+
+[[example]]
+name = "usd_viewer"
+path = "examples/usd_viewer.rs"
+
+[[example]]
+name = "urdf_viewer"
+path = "examples/urdf_viewer.rs"

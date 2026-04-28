@@ -179,6 +179,20 @@ fn ensure_mesh_library_scope(ctx: &mut Ctx<'_>) -> Result<Path> {
     let p = ctx
         .stage
         .define_prim(&robot_prim, "MeshLibrary", T_SCOPE)?;
+    // USD visibility inherits down the prim tree but does NOT propagate
+    // through `references`. Marking the library scope `invisible` hides
+    // the canonical mesh defs at world origin while the use-site prims
+    // (which only pull *opinions* via the reference, not the ancestor's
+    // inherited visibility) remain visible. Without this, renderers like
+    // bevy_openusd draw both the library entries AND the reference sites,
+    // producing a phantom copy of every unique mesh stacked at (0,0,0).
+    ctx.stage.define_attribute(
+        &p,
+        "visibility",
+        "token",
+        openusd::sdf::Value::Token("invisible".into()),
+        true,
+    )?;
     ctx.mesh_library_scope = Some(p.clone());
     Ok(p)
 }
